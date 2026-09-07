@@ -2684,7 +2684,7 @@ function magicMixer(){
           <p>Drag a hand • click a point • use locks for precision</p>
         </div>
         <div class="magic-wheel-stage">
-          <div id="magicWheel" class="magic-wheel" aria-label="Interactive color wheel" tabindex="-1"></div>
+          <div id="magicWheel" class="magic-wheel" aria-label="Interactive color wheel"></div>
         </div>
       </section>
 
@@ -2740,90 +2740,39 @@ const magicWheelBackgrounds={
   aurora:'conic-gradient(#0dd3b5,#51e59a,#b5ed68,#f4d35e,#f08cae,#9d7bea,#5271ff,#1ac8e8,#0dd3b5)'
 };
 function magicSetWheelStyle(v){magicWheelStyle=v;const w=document.getElementById('magicWheel');if(w)w.style.background=magicWheelBackgrounds[v]||magicWheelBackgrounds.classic;}
-let magicFocusRestoreTimer=null;
-let magicSamplerVisibilityHandler=null;
-
-function magicRestoreFocus(){
-  // Browsers/Windows may focus the window that was selected in the native share dialog.
-  // Restore focus to Color Magic as soon as the browser allows it, without opening or
-  // navigating another window. This does not interrupt the active screen stream.
-  try{ window.focus(); }catch(e){}
-  const root=document.getElementById('magicWheel');
-  try{ root?.focus?.({preventScroll:true}); }catch(e){ try{ root?.focus?.(); }catch(_){} }
-}
-function magicScheduleFocusRestore(){
-  if(magicFocusRestoreTimer)clearTimeout(magicFocusRestoreTimer);
-  [0,80,180,350,700].forEach(delay=>{
-    setTimeout(()=>{if(magicScreenStream)magicRestoreFocus();},delay);
-  });
-}
-
 async function magicStartScreenSampler(){
   if(!navigator.mediaDevices?.getDisplayMedia){toast('Screen sharing is not supported in this browser');return;}
   try{
     magicStopScreenSampler();
-    // Ask for video only. The native browser picker remains responsible for choosing
-    // a tab, window, or entire screen. No navigation or popup is performed here.
+    // Keep the mixer as the active UI after the browser's share chooser closes.
+    // The capture continues in the background; this only restores focus to the
+    // mixer window when the browser/OS allows programmatic focus.
+    const mixerWindow=window;
     magicScreenStream=await navigator.mediaDevices.getDisplayMedia({
       video:{cursor:'always'},
       audio:false,
-      preferCurrentTab:false,
-      selfBrowserSurface:'include',
-      surfaceSwitching:'include'
+      selfBrowserSurface:'exclude',
+      surfaceSwitching:'include',
+      monitorTypeSurfaces:'include'
     });
-    // The selected source can briefly receive OS focus after the user presses Share.
-    // Immediately request focus back to this Color Magic page while keeping capture alive.
-    magicScheduleFocusRestore();
-
+    const restoreMixerFocus=()=>{
+      try{mixerWindow.focus();}
+      catch(_){}
+    };
+    restoreMixerFocus();
+    setTimeout(restoreMixerFocus,50);
+    setTimeout(restoreMixerFocus,250);
+    setTimeout(restoreMixerFocus,750);
     const wrap=document.getElementById('magicSamplerWrap'),video=document.getElementById('magicSamplerVideo'),canvas=document.getElementById('magicSamplerCanvas');
     if(!wrap||!video||!canvas)return;
     wrap.hidden=false;video.srcObject=magicScreenStream;await video.play();
-    magicScheduleFocusRestore();
-    const stopBtn=document.getElementById('magicStopSampler');
-    if(stopBtn)stopBtn.disabled=false;
-
-    const sample=e=>{
-      if(!video.videoWidth)return;
-      const r=canvas.getBoundingClientRect();
-      const x=Math.max(0,Math.min(canvas.width-1,Math.floor((e.clientX-r.left)/r.width*canvas.width)));
-      const y=Math.max(0,Math.min(canvas.height-1,Math.floor((e.clientY-r.top)/r.height*canvas.height)));
-      const d=canvas.getContext('2d').getImageData(x,y,1,1).data;
-      const c=magicSelected()||magicColors[0];
-      if(c){c.hex=rgbHex(d[0],d[1],d[2]);c.l=hexToHsl(c.hex)[2];magicRender();toast('Sampled '+c.hex);magicScheduleFocusRestore();}
-    };
+    document.getElementById('magicStopSampler').disabled=false;
+    const sample=e=>{if(!video.videoWidth)return;const r=canvas.getBoundingClientRect();const x=Math.max(0,Math.min(canvas.width-1,Math.floor((e.clientX-r.left)/r.width*canvas.width)));const y=Math.max(0,Math.min(canvas.height-1,Math.floor((e.clientY-r.top)/r.height*canvas.height)));const d=canvas.getContext('2d').getImageData(x,y,1,1).data;const c=magicSelected()||magicColors[0];if(c){c.hex=rgbHex(d[0],d[1],d[2]);c.l=hexToHsl(c.hex)[2];magicRender();toast('Sampled '+c.hex)}};
     canvas.onclick=sample;
-
-    const draw=()=>{
-      if(!magicScreenStream)return;
-      if(video.readyState<2){requestAnimationFrame(draw);return;}
-      const maxW=900,scale=Math.min(1,maxW/video.videoWidth);
-      canvas.width=Math.max(1,Math.round(video.videoWidth*scale));
-      canvas.height=Math.max(1,Math.round(video.videoHeight*scale));
-      canvas.getContext('2d').drawImage(video,0,0,canvas.width,canvas.height);
-      requestAnimationFrame(draw);
-    };
-    draw();
-
-    // If the browser/OS changes focus while capture is active, try to return the user
-    // to Color Magic instead of leaving them stranded on the shared source.
-    magicSamplerVisibilityHandler=()=>{
-      if(magicScreenStream && document.visibilityState==='visible')magicScheduleFocusRestore();
-    };
-    document.addEventListener('visibilitychange',magicSamplerVisibilityHandler);
-
+    const draw=()=>{if(!magicScreenStream||video.readyState<2)return requestAnimationFrame(draw);const maxW=900,scale=Math.min(1,maxW/video.videoWidth);canvas.width=Math.max(1,Math.round(video.videoWidth*scale));canvas.height=Math.max(1,Math.round(video.videoHeight*scale));canvas.getContext('2d').drawImage(video,0,0,canvas.width,canvas.height);requestAnimationFrame(draw)};draw();
     magicScreenStream.getVideoTracks()[0].addEventListener('ended',magicStopScreenSampler,{once:true});
-    toast('Screen sharing started — Color Magic stays active while the shared source is captured');
-    magicScheduleFocusRestore();
-  }catch(e){
-    if(e?.name!=='NotAllowedError'&&e?.name!=='AbortError')toast('Could not start screen sampler');
-  }
-}
-function magicStopScreenSampler(){
-  if(magicFocusRestoreTimer){clearTimeout(magicFocusRestoreTimer);magicFocusRestoreTimer=null;}
-  if(magicSamplerVisibilityHandler){document.removeEventListener('visibilitychange',magicSamplerVisibilityHandler);magicSamplerVisibilityHandler=null;}
-  if(magicScreenStream){magicScreenStream.getTracks().forEach(t=>t.stop());magicScreenStream=null;}
-  const wrap=document.getElementById('magicSamplerWrap'),video=document.getElementById('magicSamplerVideo'),btn=document.getElementById('magicStopSampler');
-  if(wrap)wrap.hidden=true;if(video)video.srcObject=null;if(btn)btn.disabled=true;
+    toast('Screen sharing started — share Entire Screen for cross-app sampling');
+  }catch(e){if(e?.name!=='NotAllowedError'&&e?.name!=='AbortError')toast('Could not start screen sampler');}
 }
 function magicStopScreenSampler(){
   if(magicScreenStream){magicScreenStream.getTracks().forEach(t=>t.stop());magicScreenStream=null;}
